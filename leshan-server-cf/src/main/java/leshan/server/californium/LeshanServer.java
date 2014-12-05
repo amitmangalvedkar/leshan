@@ -31,6 +31,8 @@ package leshan.server.californium;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.security.PrivateKey;
+import java.security.PublicKey;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -52,7 +54,6 @@ import leshan.server.impl.SecurityRegistryImpl;
 import leshan.server.observation.ObservationRegistry;
 import leshan.server.request.LwM2mRequest;
 import leshan.server.security.SecurityRegistry;
-import leshan.util.Validate;
 
 import org.eclipse.californium.core.CoapServer;
 import org.eclipse.californium.core.network.CoAPEndpoint;
@@ -113,8 +114,7 @@ public class LeshanServer implements LwM2mServer {
      */
     public LeshanServer(final ClientRegistry clientRegistry, final SecurityRegistry securityRegistry,
             final ObservationRegistry observationRegistry) {
-        this(new InetSocketAddress((InetAddress) null, PORT), new InetSocketAddress((InetAddress) null, PORT_DTLS),
-                clientRegistry, securityRegistry, observationRegistry);
+        this(null, null, clientRegistry, securityRegistry, observationRegistry);
     }
 
     /**
@@ -122,30 +122,36 @@ public class LeshanServer implements LwM2mServer {
      *
      * @param localAddress the address to bind the CoAP server.
      * @param localAddressSecure the address to bind the CoAP server for DTLS connection.
+     * @param privateKey for RPK authentication mode
+     * @param publicKey for RPK authentication mode
      */
-    public LeshanServer(final InetSocketAddress localAddress, final InetSocketAddress localAddressSecure,
-            final ClientRegistry clientRegistry, final SecurityRegistry securityRegistry, final ObservationRegistry observationRegistry) {
-        Validate.notNull(localAddress, "IP address cannot be null");
-        Validate.notNull(localAddressSecure, "Secure IP address cannot be null");
+    public LeshanServer(InetSocketAddress localAddress, InetSocketAddress localAddressSecure,
+            final ClientRegistry clientRegistry, final SecurityRegistry securityRegistry,
+            final ObservationRegistry observationRegistry) {
+        if (localAddress == null)
+            localAddress = new InetSocketAddress((InetAddress) null, PORT);
+
+        if (localAddressSecure == null)
+            localAddressSecure = new InetSocketAddress((InetAddress) null, PORT_DTLS);
 
         // init registry
         if (clientRegistry == null) {
-			this.clientRegistry = new ClientRegistryImpl();
-		} else {
-			this.clientRegistry = clientRegistry;
-		}
+            this.clientRegistry = new ClientRegistryImpl();
+        } else {
+            this.clientRegistry = clientRegistry;
+        }
 
         if (observationRegistry == null) {
-			this.observationRegistry = new ObservationRegistryImpl();
-		} else {
-			this.observationRegistry = observationRegistry;
-		}
+            this.observationRegistry = new ObservationRegistryImpl();
+        } else {
+            this.observationRegistry = observationRegistry;
+        }
 
         if (securityRegistry == null) {
-			this.securityRegistry = new SecurityRegistryImpl();
-		} else {
-			this.securityRegistry = securityRegistry;
-		}
+            this.securityRegistry = new SecurityRegistryImpl();
+        } else {
+            this.securityRegistry = securityRegistry;
+        }
 
         // Cancel observations on client unregistering
         this.clientRegistry.addListener(new ClientRegistryListener() {
@@ -169,9 +175,13 @@ public class LeshanServer implements LwM2mServer {
         final Endpoint endpoint = new CoAPEndpoint(localAddress);
         coapServer.addEndpoint(endpoint);
 
-        // init DTLS server
-        final DTLSConnector connector = new DTLSConnector(localAddressSecure, null);
+        // init init DTLS server
+        DTLSConnector connector = new DTLSConnector(localAddressSecure);
         connector.getConfig().setPskStore(new LwM2mPskStore(this.securityRegistry, this.clientRegistry));
+        PrivateKey privateKey = this.securityRegistry.getServerPrivateKey();
+        PublicKey publicKey = this.securityRegistry.getServerPublicKey();
+        if (privateKey != null && publicKey != null)
+            connector.getConfig().setPrivateKey(privateKey, publicKey);
 
         final Endpoint secureEndpoint = new SecureEndpoint(connector);
         coapServer.addEndpoint(secureEndpoint);
@@ -191,7 +201,7 @@ public class LeshanServer implements LwM2mServer {
      * Starts the server and binds it to the specified port.
      */
     @Override
-	public void start() {
+    public void start() {
         // load resource definitions
         Resources.load();
 
@@ -200,15 +210,15 @@ public class LeshanServer implements LwM2mServer {
 
         // start client registry
         if (clientRegistry instanceof ClientRegistryImpl) {
-			((ClientRegistryImpl) clientRegistry).start();
-		}
+            ((ClientRegistryImpl) clientRegistry).start();
+        }
     }
 
     /**
      * Stops the server and unbinds it from assigned ports (can be restarted).
      */
     @Override
-	public void stop() {
+    public void stop() {
         coapServer.stop();
 
         if (clientRegistry instanceof ClientRegistryImpl) {
@@ -256,8 +266,8 @@ public class LeshanServer implements LwM2mServer {
     }
 
     @Override
-    public <T extends ClientResponse> void send(final LwM2mRequest<T> request, final ResponseConsumer<T> responseCallback,
-            final ExceptionConsumer errorCallback) {
+    public <T extends ClientResponse> void send(final LwM2mRequest<T> request,
+            final ResponseConsumer<T> responseCallback, final ExceptionConsumer errorCallback) {
         requestSender.send(request, responseCallback, errorCallback);
     }
 }

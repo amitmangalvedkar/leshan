@@ -29,9 +29,26 @@
  */
 package leshan.standalone;
 
+import java.math.BigInteger;
 import java.net.InetSocketAddress;
+import java.security.AlgorithmParameters;
+import java.security.KeyFactory;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.spec.ECGenParameterSpec;
+import java.security.spec.ECParameterSpec;
+import java.security.spec.ECPoint;
+import java.security.spec.ECPrivateKeySpec;
+import java.security.spec.ECPublicKeySpec;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.InvalidParameterSpecException;
+import java.security.spec.KeySpec;
+
+import javax.xml.bind.DatatypeConverter;
 
 import leshan.server.californium.LeshanServer;
+import leshan.server.impl.SecurityRegistryImpl;
 import leshan.standalone.servlet.ClientServlet;
 import leshan.standalone.servlet.EventServlet;
 import leshan.standalone.servlet.ObjectSpecServlet;
@@ -56,15 +73,49 @@ public class LeshanStandalone {
         String ifaces = System.getenv("COAPSIFACE");
 
         // LWM2M server
-        if (iface == null || iface.isEmpty() || ifaces == null || ifaces.isEmpty()) {
-            lwServer = new LeshanServer();
-        } else {
+        InetSocketAddress coapAddress = null;
+        InetSocketAddress coapSecureAddress = null;
+        if (iface != null && !iface.isEmpty()) {
             String[] add = iface.split(":");
-            String[] adds = ifaces.split(":");
-            // user specified the iface to be bound
-            lwServer = new LeshanServer(new InetSocketAddress(add[0], Integer.parseInt(add[1])), new InetSocketAddress(
-                    adds[0], Integer.parseInt(adds[1])));
+            coapAddress = new InetSocketAddress(add[0], Integer.parseInt(add[1]));
         }
+        if (ifaces != null && !ifaces.isEmpty()) {
+            String[] adds = ifaces.split(":");
+            coapSecureAddress = new InetSocketAddress(adds[0], Integer.parseInt(adds[1]));
+        }
+
+        // Get public and private server key
+        PrivateKey privateKey = null;
+        PublicKey publicKey = null;
+        try {
+            // Get point values
+            byte[] publicX = DatatypeConverter
+                    .parseHexBinary("fcc28728c123b155be410fc1c0651da374fc6ebe7f96606e90d927d188894a73");
+            byte[] publicY = DatatypeConverter
+                    .parseHexBinary("d2ffaa73957d76984633fc1cc54d0b763ca0559a9dff9706e9f4557dacc3f52a");
+            byte[] privateS = DatatypeConverter
+                    .parseHexBinary("1dae121ba406802ef07c193c1ee4df91115aabd79c1ed7f4c0ef7ef6a5449400");
+
+            // Get Elliptic Curve Parameter spec for secp256r1
+            AlgorithmParameters algoParameters = AlgorithmParameters.getInstance("EC");
+            algoParameters.init(new ECGenParameterSpec("secp256r1"));
+            ECParameterSpec parameterSpec = algoParameters.getParameterSpec(ECParameterSpec.class);
+
+            // Create key specs
+            KeySpec publicKeySpec = new ECPublicKeySpec(new ECPoint(new BigInteger(publicX), new BigInteger(publicY)),
+                    parameterSpec);
+            KeySpec privateKeySpec = new ECPrivateKeySpec(new BigInteger(privateS), parameterSpec);
+
+            // Get keys
+            publicKey = KeyFactory.getInstance("EC").generatePublic(publicKeySpec);
+            privateKey = KeyFactory.getInstance("EC").generatePrivate(privateKeySpec);
+        } catch (InvalidKeySpecException | NoSuchAlgorithmException | InvalidParameterSpecException e) {
+            LOG.warn("Unable to load RPK.", e);
+        }
+
+        // create and start leshan server
+        lwServer = new LeshanServer(coapAddress, coapSecureAddress, null, new SecurityRegistryImpl(privateKey,
+                publicKey), null);
         lwServer.start();
 
         // now prepare and start jetty
